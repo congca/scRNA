@@ -1,0 +1,260 @@
+################################################
+#      GEO   2021                              #
+#      Cong C                                  #
+################################################
+
+memory.limit()
+memory.limit(102400)
+### download table from GEO and generate
+
+## set working directory and load libraries for processing
+dir()
+library(parallel)
+cl.cores <- detectCores()
+cl.cores
+#Creates a set of copies of R running in parallel 
+#and communicating over sockets.
+cl <- makeCluster(cl.cores)
+#stopCluster(cl)
+
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#   install.packages("BiocManager")
+library(BiocManager)
+# BiocManager::install("GEOquery")
+library(GEOquery)
+###########################################################################
+## Series GSE134691
+library(Seurat)  
+library(dplyr)
+library(patchwork)
+new_counts <- read.table(file="./GSM3946323_SIA_0_Seurat_count_matrix.txt",row.names = 1)
+head(new_counts)
+dim(new_counts)#[1] 11414  7542
+mydata <- CreateSeuratObject(counts = new_counts, min.cells = 3, project = "mydata_scRNAseq")
+mydata#11413 features across 7542 samples within 1 assay 
+
+pbmc.data <- new_counts
+at_least_one <- apply(pbmc.data, 2, function(x) sum(x>0))
+hist(at_least_one, breaks = 100,
+     main = "Distribution of detected genes",
+     xlab = "Genes with at least one tag")
+hist(colSums(pbmc.data),
+     breaks = 100, main = "Expression sum per cell",
+     xlab = "Sum expression")
+##Initialize Seurat object with pbmc data
+pbmc <- mydata
+head(pbmc$RNA@data[,1:5])
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^mt-")
+head(pbmc@meta.data, 5)
+#Draw a picture to view the number of genes, the number of UMI, and the proportion of mitochondrial genes
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+# Quality control
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+hist(colSums(pbmc$RNA@data),
+     breaks = 100,
+     main = "Total expression before normalisation",
+     xlab = "Sum of expression")
+
+## Data Standardization
+#Before standardization, the total expression of each cell
+ 
+hist(colSums(pbmc$RNA@data),
+     breaks = 100,
+     main = "Total expression before normalisation",
+     xlab = "Sum of expression")
+
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)
+#After normalization, the total expression of each cell
+hist(colSums(pbmc$RNA@data),
+     breaks = 100,
+     main = "Total expression after normalisation",
+     xlab = "Sum of expression")  
+
+##  Change gene identification
+#To identify genes with highly variable expression between cells, 
+#follow-up studies need to focus on these genes.
+#Seurat's built-in FindVariableFeatures() function first calculates the mean and variance
+#of each gene, and directly simulates the relationship. 2000 genes are returned by default.
+
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+
+# 10 genes with the most dramatic changes in expression
+top10 <- head(VariableFeatures(pbmc), 10) #head(pbmc$RNA@var.features,10)
+# "PPBP"   "LYZ"    "S100A9" "IGLL5"  "GNLY"   "FTL"    "PF4"    "FTH1"   "GNG11"  "S100A8"
+
+# # Draw the genes whose expression changes to observe their distribution
+plot1 <- VariableFeaturePlot(pbmc)
+# Draw the genes whose expression changes and mark the first 10 genes
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1
+plot2
+
+##Data scaling
+
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features = all.genes)
+
+pbmc <- ScaleData(pbmc, vars.to.regress = "percent.mt")
+
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+pbmcTsne <- RunTSNE(pbmc,dims.use=1:10,do.fast=TRUE)
+TSNEPlot(pbmcTsne)
+
+##View the gene set that has a greater impact on each principal component
+
+
+print(pbmc[["pca"]], dims = 1:5, nfeatures = 5)
+ 
+#Visualization of gene sets that have a greater impact on each principal component
+VizDimLoadings(pbmc, dims = 1:2, reduction = "pca")
+
+DimPlot(pbmc, reduction = "pca",split.by = 'ident')
+
+DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+
+DimHeatmap(pbmc, dims = 1:15, cells = 500, balanced = TRUE)
+
+pbmc <- JackStraw(pbmc, num.replicate = 100)
+pbmc <- ScoreJackStraw(pbmc, dims = 1:20)
+
+JackStrawPlot(pbmc, dims = 1:15)
+ElbowPlot(pbmc)
+pbmc <- FindNeighbors(pbmc, dims = 1:10)
+pbmc <- FindClusters(pbmc, resolution = 0.5)
+ 
+#Check which group the cell belongs to
+head(Idents(pbmc), 5)
+
+# install UMAP： reticulate::py_install(packages ='umap-learn')
+pbmc <- RunUMAP(pbmc, dims = 1:10)
+DimPlot(pbmc, reduction = "umap")
+
+
+#Add tags for cell group xiba
+DimPlot(pbmc, reduction = "umap",label = TRUE)
+LabelClusters(DimPlot(pbmc, reduction = "umap"),id = 'ident')
+
+saveRDS(pbmc, file = "../output/pbmc_tutorial.rds")
+
+#######################   KEGG   ################################
+# Looking for differentially expressed genes (cluster biomarkers)
+# find all markers of cluster 1
+cluster1.markers <- FindMarkers(pbmc, ident.1 = 1, min.pct = 0.25)
+head(cluster1.markers, n = 5)
+
+# find all markers 
+cluster5.markers <- FindMarkers(pbmc, ident.1 = 5, ident.2 = c(0, 3), min.pct = 0.25)
+head(cluster5.markers, n = 5)
+
+# find markers for every cluster compared to all remaining cells, report only the positive ones
+pbmc.markers <- FindAllMarkers(pbmc, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+pbmc.markers %>% group_by(cluster) %>% top_n(n = 2, wt = avg_logFC)
+saveRDS(pbmc, "./pbmc_5k_v3.rds") 
+pbmc<- readRDS("./pbmc_5k_v3.rds")
+
+#For GSEA, all genetic information is required
+if (!requireNamespace("BiocManager", quietly = TRUE))
+  +   install.packages("BiocManager")
+ 
+  BiocManager::install("fgsea")
+
+  llibrary(fgsea)
+  
+  install_github('immunogenomics/presto')
+  library(presto)  
+  llibrary(presto)
+library(devtools)
+library(RPresto)
+library(Rcpp)
+pbmc.genes <- wilcoxauc(pbmc, 'seurat_clusters')
+ head(pbmc.genes)
+ 
+# We have all the genes of each cluster
+ dplyr::count(pbmc.genes, group)
+# In order to perform gene set enrichment analysis, the gene set needs to be annotated first. 
+# Use fgsea for gene set enrichment
+library(msigdbr)
+library(fgsea)
+library(ggplot2)
+msigdbr_show_species()#See what species data
+
+m_df<- msigdbr(species = "Mus musculus", category = "C7") 
+head(m_df)
+
+fgsea_sets<- m_df %>% split(x = .$gene_symbol, f = .$gs_name)
+fgsea_sets
+ 
+devtools::install_github("immunogenomics/presto")
+library('RPresto')
+pbmc.genes <- wilcoxauc(pbmc, 'seurat_clusters')
+
+pbmc.genes %>%
+  dplyr::filter(group == "0") %>%
+  arrange(desc(logFC), desc(auc)) %>%
+  head(n = 10)      
+
+
+cluster0.genes<- pbmc.genes %>%
+  dplyr::filter(group == "0") %>%
+  arrange(desc(auc)) %>%
+  dplyr::select(feature, auc)
+ranks<- deframe(cluster0.genes)
+head(ranks)
+
+fgseaRes<- fgsea(fgsea_sets, stats = ranks, nperm = 1000)
+
+fgseaResTidy <- fgseaRes %>%
+  as_tibble() %>%
+  arrange(desc(NES))
+
+fgseaResTidy %>%
+  dplyr::select(-leadingEdge, -ES, -nMoreExtreme) %>%
+  arrange(padj) %>%
+  head()
+
+# Show top20 signal pathway
+ggplot(fgseaResTidy %>% filter(padj < 0.008) %>% head(n= 20), aes(reorder(pathway, NES), NES)) +
+  geom_col(aes(fill= NES < 7.5)) +
+  coord_flip() +
+  labs(x="Pathway", y="Normalized Enrichment Score",
+       title="Hallmark pathways NES from GSEA") +
+  theme_minimal()  
+
+#GSEA style plot
+plotEnrichment(fgsea_sets[["GSE10325_CD4_TCELL_VS_MYELOID_UP"]],
+               ranks) + labs(title="GSE10325 CD4 TCELL VS MYELOID UP")
+############################ Another way do KEGG #######################################
+cluster1.markers <- FindMarkers(pbmc, ident.1 = 0, logfc.threshold = 0.25, test.use = "roc", only.pos = TRUE)
+head(cluster1.markers, n = 5)
+
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#   install.packages("BiocManager")
+# 
+# BiocManager::install("clusterProfiler")
+library(clusterProfiler)
+library(ggplot2)
+
+for( j in 0:12)
+{
+  cluster.markers <- FindMarkers(object = pbmc, ident.1 =j, logfc.threshold = 0.25, test.use = "bimod", only.pos = TRUE)
+  cluster<- row.names.data.frame(cluster.markers)
+  cluster=bitr(cluster,fromType = "SYMBOL",toType = c("ENTREZID"),OrgDb = "org.Hs.eg.db")
+  cluster.go<-enrichGO(gene=cluster[,"ENTREZID"],keyType = "ENTREZID",OrgDb=org.Hs.eg.db,ont = "ALL",pAdjustMethod = "BH",pvalueCutoff = 0.01,qvalueCutoff = 0.05,readable = TRUE)
+  assign(paste0("cluster",j,".go"),cluster.go)
+  pdf(file = paste0("cluster",j,"go.pdf"),,width=20,height=10)
+  barplot(cluster.go,showCategory=50)
+  dev.off()
+  cluster.kegg<-enrichKEGG(gene = cluster[,"ENTREZID"],organism = 'hsa', pvalueCutoff = 0.05,pAdjustMethod = 'BH', minGSSize = 10,maxGSSize = 500,qvalueCutoff = 0.2,use_internal_data = FALSE)
+  assign(paste0("cluster",j,".kegg"),cluster.kegg)
+  pdf(file = paste0("cluster",j,"kegg.pdf"),,width=20,height=10)
+  dotplot(cluster.kegg,showCategory=50)
+  dev.off()
+  write.csv(x=cluster.markers,file=paste0("cluster",j,".csv"))
+}
+
+
+
