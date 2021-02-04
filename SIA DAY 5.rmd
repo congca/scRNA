@@ -1,0 +1,285 @@
+---
+title: "scRNA-cc"
+output:
+  html_document: default
+---
+## Series GSE134691
+
+
+
+```{r cars, message=TRUE, warning=TRUE}
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#   install.packages("BiocManager")
+# library(BiocManager)
+# # BiocManager::install("GEOquery")
+# library(GEOquery)
+# library(Seurat)  
+# library(dplyr)
+# library(patchwork)
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+#   +   install.packages("BiocManager")
+#  
+#   BiocManager::install("fgsea")
+  # 
+  # library(Seurat)  
+  # 
+  # #install_github('immunogenomics/presto')
+  # library(presto)  
+
+new_counts <- read.table(file="./GSM3946326_SIA_5_Seurat_count_matrix.txt",row.names = 1)
+head(new_counts)
+```
+
+## Including Plots
+
+
+```{r pressure, echo=FALSE}
+pbmc.data <- new_counts
+at_least_one <- apply(pbmc.data, 2, function(x) sum(x>0))
+hist(at_least_one, breaks = 100,
+     main = "Distribution of detected genes",
+     xlab = "Genes with at least one tag")
+```
+
+
+
+```{r}
+mydata <- CreateSeuratObject(counts = new_counts, min.cells = 3, project = "mydata_scRNAseq")
+mydata
+```
+
+##Initialize Seurat object with pbmc data
+
+```{r message=TRUE, warning=TRUE}
+pbmc <- mydata
+head(pbmc$RNA@data[,1:5])
+```
+
+```{r}
+pbmc[["percent.mt"]] <- PercentageFeatureSet(pbmc, pattern = "^mt-")
+head(pbmc@meta.data, 5)
+```
+
+```{r}
+#Draw a picture to view the number of genes, the number of UMI, and the proportion of mitochondrial genes
+VlnPlot(pbmc, features = c("nFeature_RNA", "nCount_RNA", "percent.mt"), ncol = 3)
+
+plot1 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "percent.mt")
+plot2 <- FeatureScatter(pbmc, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot1 + plot2
+```
+
+# Quality control
+#
+# Screen for cells with more than 2500 or less than 200 genes detected
+# The number of mitochondrial genes in a single cell exceeds >5%
+
+```{r}
+pbmc <- subset(pbmc, subset = nFeature_RNA > 200 & nFeature_RNA < 2500 & percent.mt < 5)
+hist(colSums(pbmc$RNA@data),
+     breaks = 100,
+     main = "Total expression before normalisation",
+     xlab = "Sum of expression")
+```
+
+## Data Standardization
+
+#The default data standardization method is LogNormalize, the total expression of each cell is standardized to 10000, and then log takes the logarithm; the result is stored in pbmc[["RNA"]]@data.
+#Before standardization, the total expression of each cell
+ 
+```{r}
+hist(colSums(pbmc$RNA@data),
+     breaks = 100,
+     main = "Total expression before normalisation",
+     xlab = "Sum of expression")
+```
+```{r}
+pbmc <- NormalizeData(pbmc, normalization.method = "LogNormalize", scale.factor = 10000)
+```
+
+
+#After normalization, the total expression of each cell
+
+```{r}
+hist(colSums(pbmc$RNA@data),
+     breaks = 100,
+     main = "Total expression after normalisation",
+     xlab = "Sum of expression")  
+```
+ 
+
+##  Change gene identification
+
+#To identify genes with highly variable expression between cells, 
+#follow-up studies need to focus on these genes.
+#Seurat's built-in FindVariableFeatures() function first calculates the mean and variance
+#of each gene, and directly simulates the relationship. 2000 genes are returned by default.
+
+```{r}
+pbmc <- FindVariableFeatures(pbmc, selection.method = "vst", nfeatures = 2000)
+
+```
+# 10 genes with the most dramatic changes in expression
+ 
+```{r}
+top10 <- head(VariableFeatures(pbmc), 10) 
+head(pbmc$RNA@var.features,10)
+plot1 <- VariableFeaturePlot(pbmc)
+
+```
+ # # Draw the genes whose expression changes to observe their distribution
+```{r}
+plot2 <- LabelPoints(plot = plot1, points = top10, repel = TRUE)
+plot1
+plot2
+```
+ 
+##  Data scaling
+```{r}
+
+all.genes <- rownames(pbmc)
+pbmc <- ScaleData(pbmc, features = all.genes)
+pbmc <- ScaleData(pbmc, vars.to.regress = "percent.mt")
+
+```
+
+```{r}
+pbmc <- RunPCA(pbmc, features = VariableFeatures(object = pbmc))
+```
+
+
+```{r}
+pbmcTsne <- RunTSNE(pbmc,dims.use=1:10,do.fast=TRUE)
+```
+
+
+```{r}
+TSNEPlot(pbmcTsne)
+```
+ 
+ 
+ 
+ ##View the gene set that has a greater impact on each principal component
+
+```{r}
+print(pbmc[["pca"]], dims = 1:5, nfeatures = 5)
+```
+
+#Visualization of gene sets that have a greater impact on each principal component
+ 
+```{r}
+
+VizDimLoadings(pbmc, dims = 1:2, reduction = "pca")
+
+
+```
+
+```{r}
+DimPlot(pbmc, reduction = "pca",split.by = 'ident')
+```
+```{r}
+DimHeatmap(pbmc, dims = 1, cells = 500, balanced = TRUE)
+```
+
+```{r}
+DimHeatmap(pbmc, dims = 1:15, cells = 500, balanced = TRUE)
+```
+```{r}
+pbmc <- JackStraw(pbmc, num.replicate = 100)
+```
+
+```{r}
+
+pbmc <- ScoreJackStraw(pbmc, dims = 1:20)
+JackStrawPlot(pbmc, dims = 1:15)
+
+```
+
+```{r}
+ElbowPlot(pbmc)
+```
+
+```{r}
+pbmc <- FindNeighbors(pbmc, dims = 1:10)
+pbmc <- FindClusters(pbmc, resolution = 0.5)
+```
+#Check which group the cell belongs to
+
+
+```{r}
+head(Idents(pbmc), 5)
+```
+
+
+```{r}
+
+# install UMAP： reticulate::py_install(packages ='umap-learn')
+pbmc <- RunUMAP(pbmc, dims = 1:10)
+DimPlot(pbmc, reduction = "umap")
+```
+
+#Add tags for cell group xiba
+
+
+```{r}
+DimPlot(pbmc, reduction = "umap",label = TRUE)
+LabelClusters(DimPlot(pbmc, reduction = "umap"),id = 'ident')
+```
+
+
+```{r}
+saveRDS(pbmc, file = "./pbmc.rds")
+```
+
+#######################   KEGG   ################################
+# Looking for differentially expressed genes (cluster biomarkers)
+# find all markers of cluster 1
+```{r}
+cluster1.markers <- FindMarkers(pbmc, ident.1 = 1, min.pct = 0.25)
+head(cluster1.markers, n = 5)
+```
+# find markers for every cluster compared to all remaining cells, report only the positive ones
+```{r message=TRUE, warning=TRUE}
+pbmc.markers <- FindAllMarkers(pbmc, only.pos = TRUE, min.pct = 0.25, logfc.threshold = 0.25)
+```
+
+
+```{r}
+saveRDS(pbmc, "./pbmc_day5.rds")
+```
+
+#For GSEA, all genetic information is required
+```{r message=TRUE, warning=TRUE}
+pbmc<- readRDS("./pbmc_day5.rds")
+# library(devtools)
+# library(RPresto)
+# library(Rcpp)
+```
+
+ 
+# In order to perform gene set enrichment analysis, the gene set needs to be annotated first.  
+# Use fgsea for gene set enrichment
+```{r}
+# dplyr::count(pbmc.genes, group)
+# install.packages("msigdbr")
+# library(msigdbr)
+# library(fgsea)
+# library(ggplot2)
+
+```
+
+#See what species 
+```{r}
+msigdbr_show_species()
+```
+
+
+```{r}
+m_df<- msigdbr(species = "Mus musculus", category = "C7") 
+head(m_df)
+```
+
+
+ 
+ 
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
